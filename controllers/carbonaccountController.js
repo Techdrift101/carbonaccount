@@ -7,7 +7,7 @@ import {
   DeleteCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { v4 as uuidv4 } from "uuid";
-import accountSchema from "../models/carbonaccount.js";
+import accountSchema, { withCarbonFields } from "../models/carbonaccount.js";
 
 async function getAllAccounts(req, res, next) {
   try {
@@ -16,7 +16,8 @@ async function getAllAccounts(req, res, next) {
     };
     const command = new ScanCommand(params);
     const result = await database.send(command);
-    res.status(200).json(result.Items);
+    // Fill in carbon fields for older records that don't have them yet
+    res.status(200).json(result.Items.map(withCarbonFields));
   } catch (err) {
     next(err);
   }
@@ -33,7 +34,17 @@ async function createAccount(req, res, next) {
       return;
     }
 
-    const { id, sort_code, account_number, balance } = value;
+    // Works out net_zero_progress and interest_rate from the carbon figures
+    const {
+      id,
+      sort_code,
+      account_number,
+      balance,
+      baseline_emissions,
+      net_carbon_reduction,
+      net_zero_progress,
+      interest_rate,
+    } = withCarbonFields(value);
 
     const params = {
       TableName: "carbonaccount",
@@ -42,6 +53,10 @@ async function createAccount(req, res, next) {
         sort_code,
         account_number,
         balance,
+        baseline_emissions,
+        net_carbon_reduction,
+        net_zero_progress,
+        interest_rate,
       },
     };
 
@@ -69,7 +84,8 @@ async function getAccountById(req, res, next) {
     if (!result.Item) {
       return res.status(404).json({ message: "No account found" });
     }
-    res.status(200).json(result.Item);
+    // Fill in carbon fields for older records that don't have them yet
+    res.status(200).json(withCarbonFields(result.Item));
   } catch (err) {
     next(err);
   }
@@ -85,9 +101,18 @@ async function updateAccountById(req, res, next) {
       return res.status(400).json({ error: error.details[0].message });
     }
 
-    const { balance, sort_code, account_number } = value;
+    // Recalculate net_zero_progress and interest_rate from the new figures
+    const {
+      balance,
+      sort_code,
+      account_number,
+      baseline_emissions,
+      net_carbon_reduction,
+      net_zero_progress,
+      interest_rate,
+    } = withCarbonFields(value);
 
-    // Get the movie from DynamoDB
+    // Get the account from DynamoDB
     const getParams = {
       TableName: "carbonaccount",
       Key: { id: accountId },
@@ -108,16 +133,26 @@ async function updateAccountById(req, res, next) {
       TableName: "carbonaccount",
       Key: { id: accountId },
       UpdateExpression:
-        "set #balance = :balance, #sort_code = :sort_code, #account_number = :account_number",
+        "set #balance = :balance, #sort_code = :sort_code, #account_number = :account_number, " +
+        "#baseline_emissions = :baseline_emissions, #net_carbon_reduction = :net_carbon_reduction, " +
+        "#net_zero_progress = :net_zero_progress, #interest_rate = :interest_rate",
       ExpressionAttributeNames: {
         "#balance": "balance",
         "#sort_code": "sort_code",
         "#account_number": "account_number",
+        "#baseline_emissions": "baseline_emissions",
+        "#net_carbon_reduction": "net_carbon_reduction",
+        "#net_zero_progress": "net_zero_progress",
+        "#interest_rate": "interest_rate",
       },
       ExpressionAttributeValues: {
         ":balance": balance,
         ":sort_code": sort_code,
         ":account_number": account_number,
+        ":baseline_emissions": baseline_emissions,
+        ":net_carbon_reduction": net_carbon_reduction,
+        ":net_zero_progress": net_zero_progress,
+        ":interest_rate": interest_rate,
       },
       ReturnValues: "ALL_NEW",
     };
